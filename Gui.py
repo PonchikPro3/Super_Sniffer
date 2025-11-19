@@ -18,6 +18,10 @@ class MainApp:
         self.use_filters = False
         self.invert_filters = False
 
+        # Стек для отслеживания окон
+        self.window_stack = []
+        self.current_window = "main"
+
         self.show_main_window()
 
     def clear_window(self):
@@ -25,14 +29,33 @@ class MainApp:
         for widget in self.app.winfo_children():
             widget.destroy()
 
+    def push_window(self, window_func):
+        # Сохраняем текущее окно в стек перед открытием нового
+        self.window_stack.append(self.current_window)
+        window_func()
+
+    def pop_window(self):
+        # Возвращаемся на предыдущее окно из стека
+        if self.window_stack:
+            prev_window = self.window_stack.pop()
+            if prev_window == "main":
+                self.show_main_window()
+            elif prev_window == "output":
+                # Для возврата в окно вывода нужно знать URL
+                self.open_output_window(self.current_url)
+        else:
+            # Если стек пуст, возвращаемся на главное окно
+            self.show_main_window()
+
     def show_main_window(self):
         self.clear_window()
+        self.current_window = "main"
 
         # Заголовок
         title = ctk.CTkLabel(
             self.app,
             text="Super_Sniffer",
-            font=("Helvetica", 32, "bold")  # Шрифт и размер
+            font=("Helvetica", 32, "bold")
         )
         title.pack(pady=(30, 20))
 
@@ -50,25 +73,27 @@ class MainApp:
         start_button = ctk.CTkButton(
             self.app,
             text="Start",
-            width=120,
-            height=120,
-            corner_radius=60,  # Круглая
-            fg_color="#6c757d",  # Цвет кнопки
-            text_color="#f8f9fa",  # Цвет текста
-            font=("Arial", 16, "bold"),
+            width=140,
+            height=140,
+            corner_radius=70,
+            fg_color="#6c757d",
+            text_color="#f8f9fa",
+            font=("Arial", 18, "bold"),
             hover_color="#5a6268",
             command=self.on_start_click
         )
-        start_button.pack(pady=30)
+        start_button.pack(pady=50)
 
         # Кнопка "Установка фильтров"
         filters_button = ctk.CTkButton(
             self.app,
             text="Установка фильтров",
-            fg_color="#adb5bd",  # Цвет кнопки
-            text_color="#f8f9fa",  # Цвет текста
+            width=200,
+            height=40,
+            fg_color="#adb5bd",
+            text_color="#f8f9fa",
             hover_color="#9a9fa5",
-            command=self.open_filters_window
+            command=lambda: self.push_window(self.open_filters_window)
         )
         filters_button.pack(side="bottom", pady=20)
 
@@ -78,10 +103,12 @@ class MainApp:
             # Показать окно ошибки
             messagebox.showerror("Ошибка", "Пожалуйста, введите URL")
         else:
-            self.open_output_window(url)
+            self.current_url = url
+            self.push_window(lambda: self.open_output_window(url))
 
     def open_output_window(self, url):
         self.clear_window()
+        self.current_window = "output"
 
         # Показ URL
         url_label = ctk.CTkLabel(self.app, text=f"URL: {url}", font=("Arial", 14))
@@ -92,12 +119,11 @@ class MainApp:
             self.app,
             width=450,
             height=400,
-            fg_color="#e9ecef",  # Цвет фона
+            fg_color="#e9ecef",
             text_color="black",
-            state="disabled"  # Только для чтения
+            state="disabled"
         )
         self.output_textbox.pack(pady=20)
-        # Вставляем тестовое сообщение
         self.output_textbox.configure(state="normal")
         self.output_textbox.insert("0.0", "Тестовое сообщение: данные загружаются...")
         self.output_textbox.configure(state="disabled")
@@ -109,8 +135,10 @@ class MainApp:
         stop_button = ctk.CTkButton(
             button_frame,
             text="Stop",
-            fg_color="#adb5bd",  # Цвет кнопки
-            text_color="#f8f9fa",  # Цвет текста
+            width=120,
+            height=40,
+            fg_color="#adb5bd",
+            text_color="#f8f9fa",
             hover_color="#9a9fa5",
             command=self.show_main_window
         )
@@ -119,15 +147,18 @@ class MainApp:
         set_filters_button = ctk.CTkButton(
             button_frame,
             text="Set filters",
-            fg_color="#adb5bd",  # Цвет кнопки
-            text_color="#f8f9fa",  # Цвет текста
+            width=120,
+            height=40,
+            fg_color="#adb5bd",
+            text_color="#f8f9fa",
             hover_color="#9a9fa5",
-            command=self.open_filters_window
+            command=lambda: self.push_window(self.open_filters_window)
         )
         set_filters_button.pack(side="right", padx=10)
 
     def open_filters_window(self):
         self.clear_window()
+        self.current_window = "filters"
 
         # Текст сверху
         title = ctk.CTkLabel(self.app, text="Добавить фильтры", font=("Arial", 16))
@@ -138,11 +169,10 @@ class MainApp:
             self.app,
             width=350,
             height=150,
-            fg_color="#e9ecef",  # Цвет фона
+            fg_color="#e9ecef",
             text_color="black"
         )
         self.filters_entry.pack(pady=10)
-        # Загрузка текущих фильтров
         self.filters_entry.insert("0.0", self.filters)
 
         # Переключатели
@@ -155,22 +185,24 @@ class MainApp:
         invert_filters = ctk.CTkCheckBox(self.app, text="Invert filters", variable=self.invert_var)
         invert_filters.pack(pady=5)
 
-        # Кнопка "Continue"
+        # Кнопка "Continue" — возвращает на предыдущее окно
         continue_button = ctk.CTkButton(
             self.app,
             text="Continue",
-            fg_color="#adb5bd",  # Цвет кнопки
-            text_color="#f8f9fa",  # Цвет текста
+            width=120,
+            height=40,
+            fg_color="#adb5bd",
+            text_color="#f8f9fa",
             hover_color="#9a9fa5",
-            command=self.save_and_return
+            command=self.save_and_return_to_prev
         )
         continue_button.pack(side="bottom", pady=30)
 
-    def save_and_return(self):
+    def save_and_return_to_prev(self):
         self.filters = self.filters_entry.get("0.0", "end").strip()
         self.use_filters = self.use_var.get()
         self.invert_filters = self.invert_var.get()
-        self.show_main_window()
+        self.pop_window()
 
     def run(self):
         self.app.mainloop()
