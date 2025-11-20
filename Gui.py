@@ -3,6 +3,7 @@ from tkinter import messagebox
 import socket
 from scapy.all import sniff, IP
 import threading
+import requests  # Для автоматического запроса
 
 # Настройка внешнего вида
 ctk.set_appearance_mode("Light")
@@ -24,14 +25,18 @@ def get_ip_from_url(url):
     except Exception as e:
         raise ValueError(f"Не удалось получить IP для URL: {url}. Ошибка: {e}")
 
-def start_sniffing(url, output_callback, stop_event):
+def start_sniffing(url, output_callback, stop_event, filters="", use_filters=False, invert_filters=False):
     """
     Запускает сниффинг пакетов, исходящих к IP-адресу, полученному из URL.
+    С фильтрацией по ключевым словам и инверсией.
     """
     try:
         target_ip = get_ip_from_url(url)
         output_callback(f"[INFO] Целевой IP: {target_ip}")
         output_callback(f"[INFO] Фильтр: 'host {target_ip}'")
+
+        # Парсим фильтры: разбиваем по переносам строк и убираем пустые
+        filter_keywords = [kw.strip() for kw in filters.split("\n") if kw.strip()]
 
         def packet_handler(packet):
             if stop_event.is_set():
@@ -42,14 +47,45 @@ def start_sniffing(url, output_callback, stop_event):
                 ip_src = packet[IP].src
                 ip_dst = packet[IP].dst
                 protocol = packet[IP].proto
-                line = f"[{ip_src} -> {ip_dst}] Protocol: {protocol} | {packet.summary()}"
-            output_callback(line)
+                payload = bytes(packet[IP].payload)
+                line = f"[{ip_src} -> {ip_dst}] Protocol: {protocol} | Payload: {payload[:100]} | {packet.summary()}"
 
-        # Используем более широкий фильтр — ловим все пакеты с этим IP
-        sniff(filter=f"host {target_ip}", prn=packet_handler, stop_filter=lambda x: stop_event.is_set(), timeout=20)
+            # Применяем фильтрацию
+            if use_filters and filter_keywords:
+                # Проверяем, есть ли хотя бы одно ключевое слово в строке
+                contains_keyword = any(kw in line for kw in filter_keywords)
+                if invert_filters:
+                    # Инверсия: выводим, если НЕ содержит
+                    if not contains_keyword:
+                        output_callback(line)
+                else:
+                    # Обычный режим: выводим, если содержит
+                    if contains_keyword:
+                        output_callback(line)
+            else:
+                # Если фильтры не включены, просто выводим
+                output_callback(line)
+
+        # Запускаем сниффинг в отдельном потоке
+        sniff_thread = threading.Thread(
+            target=lambda: sniff(filter=f"host {target_ip}", prn=packet_handler, stop_filter=lambda x: stop_event.is_set(), timeout=20),
+            daemon=True
+        )
+        sniff_thread.start()
+
+        # Делаем HTTP-запрос, чтобы вызвать трафик
+        try:
+            output_callback("[INFO] Отправляем HTTP-запрос...")
+            response = requests.get(url, timeout=5)
+            output_callback(f"[INFO] HTTP-ответ: {response.status_code}")
+        except Exception as e:
+            output_callback(f"[ERROR] Не удалось сделать запрос: {e}")
+
+        sniff_thread.join()
         output_callback("[INFO] Сниффинг завершён.")
     except Exception as e:
         output_callback(f"[ERROR] {e}")
+
 
 class MainApp:
     def __init__(self):
@@ -179,7 +215,7 @@ class MainApp:
         self.stop_sniffer.clear()
         self.sniffer_thread = threading.Thread(
             target=start_sniffing,
-            args=(url, self.append_to_output, self.stop_sniffer),
+            args=(url, self.append_to_output, self.stop_sniffer, self.filters, self.use_filters, self.invert_filters),
             daemon=True
         )
         self.sniffer_thread.start()
