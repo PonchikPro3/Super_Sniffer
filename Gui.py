@@ -1,9 +1,55 @@
 import customtkinter as ctk
 from tkinter import messagebox
+import socket
+from scapy.all import sniff, IP
+import threading
 
 # Настройка внешнего вида
 ctk.set_appearance_mode("Light")
 ctk.set_default_color_theme("blue")
+
+def get_ip_from_url(url):
+    """
+    Преобразует URL в IP-адрес.
+    """
+    try:
+        # Убираем http/https и слэш в конце, если есть
+        if url.startswith("http://"):
+            url = url[7:]
+        elif url.startswith("https://"):
+            url = url[8:]
+        host = url.split("/")[0].split(":")[0]  # Извлекаем хост
+        ip = socket.gethostbyname(host)
+        return ip
+    except Exception as e:
+        raise ValueError(f"Не удалось получить IP для URL: {url}. Ошибка: {e}")
+
+def start_sniffing(url, output_callback, stop_event):
+    """
+    Запускает сниффинг пакетов, исходящих к IP-адресу, полученному из URL.
+    """
+    try:
+        target_ip = get_ip_from_url(url)
+        output_callback(f"[INFO] Целевой IP: {target_ip}")
+        output_callback(f"[INFO] Фильтр: 'host {target_ip}'")
+
+        def packet_handler(packet):
+            if stop_event.is_set():
+                return
+            # Выводим всё, что пришло
+            line = f"[PACKET] {packet.summary()}"
+            if IP in packet:
+                ip_src = packet[IP].src
+                ip_dst = packet[IP].dst
+                protocol = packet[IP].proto
+                line = f"[{ip_src} -> {ip_dst}] Protocol: {protocol} | {packet.summary()}"
+            output_callback(line)
+
+        # Используем более широкий фильтр — ловим все пакеты с этим IP
+        sniff(filter=f"host {target_ip}", prn=packet_handler, stop_filter=lambda x: stop_event.is_set(), timeout=20)
+        output_callback("[INFO] Сниффинг завершён.")
+    except Exception as e:
+        output_callback(f"[ERROR] {e}")
 
 class MainApp:
     def __init__(self):
@@ -21,6 +67,10 @@ class MainApp:
         # Стек для отслеживания окон
         self.window_stack = []
         self.current_window = "main"
+
+        # Переменные для сниффинга
+        self.sniffer_thread = None
+        self.stop_sniffer = threading.Event()
 
         self.show_main_window()
 
@@ -124,9 +174,15 @@ class MainApp:
             state="disabled"
         )
         self.output_textbox.pack(pady=20)
-        self.output_textbox.configure(state="normal")
-        self.output_textbox.insert("0.0", "Тестовое сообщение: данные загружаются...")
-        self.output_textbox.configure(state="disabled")
+
+        # Запуск сниффинга в отдельном потоке
+        self.stop_sniffer.clear()
+        self.sniffer_thread = threading.Thread(
+            target=start_sniffing,
+            args=(url, self.append_to_output, self.stop_sniffer),
+            daemon=True
+        )
+        self.sniffer_thread.start()
 
         # Кнопки внизу
         button_frame = ctk.CTkFrame(self.app, fg_color="transparent")
@@ -140,7 +196,7 @@ class MainApp:
             fg_color="#adb5bd",
             text_color="#f8f9fa",
             hover_color="#9a9fa5",
-            command=self.show_main_window
+            command=self.stop_and_return_to_main
         )
         stop_button.pack(side="left", padx=10)
 
@@ -155,6 +211,22 @@ class MainApp:
             command=lambda: self.push_window(self.open_filters_window)
         )
         set_filters_button.pack(side="right", padx=10)
+
+    def append_to_output(self, text):
+        # Потокобезопасный вывод в текстовое поле
+        self.app.after(0, lambda: self._update_output(text))
+
+    def _update_output(self, text):
+        self.output_textbox.configure(state="normal")
+        self.output_textbox.insert("end", text + "\n")
+        self.output_textbox.see("end")
+        self.output_textbox.configure(state="disabled")
+
+    def stop_and_return_to_main(self):
+        self.stop_sniffer.set()
+        if self.sniffer_thread and self.sniffer_thread.is_alive():
+            self.sniffer_thread.join(timeout=1)
+        self.show_main_window()
 
     def open_filters_window(self):
         self.clear_window()
