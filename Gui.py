@@ -1,18 +1,17 @@
 import customtkinter as ctk
 from tkinter import messagebox
 import socket
-from scapy.all import sniff, IP
+from scapy.all import sniff  # Основной сниффер
+from scapy.layers.inet import IP  # Класс IP-пакета
 import threading
-import requests  # Для автоматического запроса
+import requests  # Для автоматического HTTP-запроса
 
 # Настройка внешнего вида
 ctk.set_appearance_mode("Light")
 ctk.set_default_color_theme("blue")
 
 def get_ip_from_url(url):
-    """
-    Преобразует URL в IP-адрес.
-    """
+
     try:
         # Убираем http/https и слэш в конце, если есть
         if url.startswith("http://"):
@@ -26,10 +25,6 @@ def get_ip_from_url(url):
         raise ValueError(f"Не удалось получить IP для URL: {url}. Ошибка: {e}")
 
 def start_sniffing(url, output_callback, stop_event, filters="", use_filters=False, invert_filters=False):
-    """
-    Запускает сниффинг пакетов, исходящих к IP-адресу, полученному из URL.
-    С фильтрацией по ключевым словам и инверсией.
-    """
     try:
         target_ip = get_ip_from_url(url)
         output_callback(f"[INFO] Целевой IP: {target_ip}")
@@ -161,7 +156,7 @@ class MainApp:
             text="Start",
             width=140,
             height=140,
-            corner_radius=70,
+            corner_radius=90,
             fg_color="#6c757d",
             text_color="#f8f9fa",
             font=("Arial", 18, "bold"),
