@@ -5,6 +5,7 @@ from scapy.all import sniff  # Основной сниффер
 from scapy.layers.inet import IP  # Класс IP-пакета
 import threading
 import requests  # Для автоматического HTTP-запроса
+from sniffer_core import validate_url, is_admin, safe_request, check_sniff_permissions
 
 # Настройка внешнего вида
 ctk.set_appearance_mode("Light")
@@ -26,6 +27,12 @@ def get_ip_from_url(url):
 
 def start_sniffing(url, output_callback, stop_event, filters="", use_filters=False, invert_filters=False):
     try:
+        # Проверка прав для захвата пакетов
+        can_sniff, sniff_error = check_sniff_permissions()
+        if not can_sniff:
+            output_callback(f"[ERROR] {sniff_error}")
+            return
+        
         target_ip = get_ip_from_url(url)
         output_callback(f"[INFO] Целевой IP: {target_ip}")
         output_callback(f"[INFO] Фильтр: 'host {target_ip}'")
@@ -61,23 +68,38 @@ def start_sniffing(url, output_callback, stop_event, filters="", use_filters=Fal
                 # Если фильтры не включены, просто выводим
                 output_callback(line)
 
-        # Запускаем сниффинг в отдельном потоке
+        # Запускаем сниффинг с обработкой ошибок
+        def safe_sniff_wrapper():
+            try:
+                sniff(filter=f"host {target_ip}", prn=packet_handler, stop_filter=lambda x: stop_event.is_set(), timeout=20)
+            except PermissionError as e:
+                output_callback(f"[ERROR] Недостаточно прав для захвата пакетов: {e}")
+            except OSError as e:
+                if "Npcap" in str(e) or "WinPcap" in str(e) or "libpcap" in str(e):
+                    output_callback("[ERROR] Npcap/WinPcap/libpcap не установлен или недоступен")
+                else:
+                    output_callback(f"[ERROR] Ошибка ОС при захвате пакетов: {e}")
+            except Exception as e:
+                output_callback(f"[ERROR] Ошибка при захвате пакетов: {e}")
+        
         sniff_thread = threading.Thread(
-            target=lambda: sniff(filter=f"host {target_ip}", prn=packet_handler, stop_filter=lambda x: stop_event.is_set(), timeout=20),
+            target=safe_sniff_wrapper,
             daemon=True
         )
         sniff_thread.start()
 
-        # Делаем HTTP-запрос, чтобы вызвать трафик
-        try:
-            output_callback("[INFO] Отправляем HTTP-запрос...")
-            response = requests.get(url, timeout=5)
-            output_callback(f"[INFO] HTTP-ответ: {response.status_code}")
-        except Exception as e:
-            output_callback(f"[ERROR] Не удалось сделать запрос: {e}")
+        # Делаем HTTP-запрос с безопасной обработкой
+        output_callback("[INFO] Отправляем HTTP-запрос...")
+        success, status_code, message = safe_request(url, timeout=5)
+        if success:
+            output_callback(f"[INFO] HTTP-ответ: {status_code}")
+        else:
+            output_callback(f"[ERROR] {message}")
 
         sniff_thread.join()
         output_callback("[INFO] Сниффинг завершён.")
+    except ValueError as e:
+        output_callback(f"[ERROR] Ошибка URL: {e}")
     except Exception as e:
         output_callback(f"[ERROR] {e}")
 
@@ -88,8 +110,11 @@ class MainApp:
         self.app.title("Super_Sniffer")
         self.app.geometry("500x600")
         self.app.configure(fg_color="#f8f9fa")
-        # Установка иконки для главного окна
-        self.app.iconbitmap("Super_Sniffer/iconSS.ico")
+        # Установка иконки для главного окна (необязательно)
+        try:
+            self.app.iconbitmap("Super_Sniffer/iconSS.ico")
+        except Exception:
+            pass  # Иконка необязательна
 
         self.filters = ""
         self.use_filters = False
@@ -183,9 +208,25 @@ class MainApp:
         if not url.strip():
             # Показать окно ошибки
             messagebox.showerror("Ошибка", "Пожалуйста, введите URL")
-        else:
-            self.current_url = url
-            self.push_window(lambda: self.open_output_window(url))
+            return
+        
+        # Валидация URL
+        is_valid, error_msg = validate_url(url)
+        if not is_valid:
+            messagebox.showerror("Ошибка URL", error_msg)
+            return
+        
+        # Проверка прав администратора перед началом
+        if not is_admin():
+            messagebox.showwarning(
+                "Требуются права администратора",
+                "Для захвата сетевых пакетов требуются права администратора.\n\n"
+                "Запустите программу от имени администратора."
+            )
+            return
+        
+        self.current_url = url
+        self.push_window(lambda: self.open_output_window(url))
 
     def open_output_window(self, url):
         self.clear_window()
